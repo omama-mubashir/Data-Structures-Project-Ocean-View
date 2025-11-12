@@ -174,3 +174,16 @@ int main() {
 ✅ Applied Dijkstra’s algorithm for route optimization
 ✅ Displayed minimum cost and full route path
 ✅ Ready for SFML integration for visualization of path traversal
+
+
+Omama Mubashir's Prompts (13/11/2025):
+"Read the pdf file thoroughly, do not miss any detail and don't answer anything yet"
+[Shared the C++ code] "the following is the code we have generated up till now:"
+"first work on the immediate fixes correct them properly use good camel case variables which make sense as well"
+"In this code i want you to check input validation thoroughly nothing should cause a potential crash"
+"I want you to keep in mind that the could should involve the best logics for the best time and space handling"
+(Note: "could" likely meant "code")
+"are the immediate fixes out of the way now?"
+"we'll go one by one so first lets make the A algorithm for this project which is missing"*
+"have you made changes to the whole code or added just this function?"
+"is this implemented properly and done?"
