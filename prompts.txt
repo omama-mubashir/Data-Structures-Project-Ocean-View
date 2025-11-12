@@ -1,0 +1,176 @@
+DS Project Development Log – OceanRoute Nav
+This document records the complete development discussion between Rehan and ChatGPT for the DS Project – OceanRoute Nav, a maritime navigation optimizer using Data Structures and Algorithms implemented in C++ with SFML visualization.
+1. Project Overview
+OceanRoute Nav simulates a global maritime route network using C++ and core data structures. The system reads data from text files, constructs a graph of 15 ports, and applies Dijkstra’s algorithm to determine the minimum-cost path between two ports. Visualization is done through SFML (Simple and Fast Multimedia Library).
+2. Development Conversation Summary
+This section summarizes the major steps and milestones discussed between Rehan (logic designer) and ChatGPT (code developer). Duplicate prompts are merged to form a clear linear flow.
+• Project Kickoff:
+Rehan: Hello broski we are going to start DS Project. My logic and your code — so say Bismillah.
+ChatGPT: Bismillah broski 🤝. Project OceanRoute Nav – Maritime Navigation Optimizer uses custom DS (no STL) and algorithms like Dijkstra for route optimization.
+• Graph Representation Discussion:
+Rehan: Graph uses array and linked list?
+ChatGPT: Exactly 💯. We'll use an adjacency list — array of ports, each having a linked list of routes.
+• Choosing Adjacency List:
+Rehan: Matrix takes space.
+ChatGPT: Right 🔥. Sparse graphs waste space with a matrix, so we use adjacency list.
+• Neighbor Logic:
+Rehan: In array with linked list we made 1D array of routes.
+ChatGPT: Yes, Port array (1D) + Linked List for neighbors.
+Rehan: Is neighbor written anywhere?
+ChatGPT: Not directly — each line in routes.txt defines neighbors implicitly.
+• 15 Ports and Portcharges:
+ChatGPT: Loaded from portcharges.txt (15 fixed ports). Each has a name, daily charge, and head pointer.
+• Core Logic (Click + Dijkstra):
+Rehan: My logic — click source, if dest is neighbor direct route, else run Dijkstra.
+ChatGPT: Exactly 🔥 — direct neighbor check first, otherwise shortest path with Dijkstra.
+• Dijkstra Explanation:
+ChatGPT: Dijkstra steps: start at source, relax edges, track minimum cost, reconstruct path via previous node array.
+• Data Storage and File Input:
+Rehan: Code for storing data.
+ChatGPT: We create Port and RouteNode structures, and load from files.
+• Fixed 15 Ports:
+Rehan: Ports fixed 15.
+ChatGPT: Perfect. No dynamic array — only static 15 entries for simplicity.
+• Memory Visualization:
+ChatGPT: 1D array of ports, each with a linked list of neighbors storing voyage info (cost, time, company, etc.).
+3. Final C++ Implementation
+The following C++ code implements the discussed logic, including:
+- Static array of 15 ports
+- Linked list adjacency representation
+- Data loading from text files
+- Direct route detection
+- Dijkstra’s algorithm for optimal pathfinding
+#include <iostream>
+#include <fstream>
+#include <cstring>
+#include <climits>
+using namespace std;
+
+#define MAX_PORTS 15
+
+struct RouteNode {
+    int destIndex;
+    int cost;
+    char company[30];
+    char date[20];
+    char depTime[10];
+    char arrTime[10];
+    RouteNode* next;
+};
+
+struct Port {
+    char name[30];
+    int dailyCharge;
+    RouteNode* head;
+};
+
+Port ports[MAX_PORTS];
+int portCount = 0;
+
+int getPortIndex(const char* portName) {
+    for (int i = 0; i < portCount; i++)
+        if (strcmp(ports[i].name, portName) == 0)
+            return i;
+    return -1;
+}
+
+void loadPortCharges() {
+    ifstream file("portcharges.txt");
+    while (file >> ports[portCount].name >> ports[portCount].dailyCharge)
+        ports[portCount++].head = NULL;
+    file.close();
+}
+
+void loadRoutes() {
+    ifstream file("routes.txt");
+    char origin[30], destination[30], date[20], dep[10], arr[10], company[30];
+    int cost;
+    while (file >> origin >> destination >> date >> dep >> arr >> cost >> company) {
+        int from = getPortIndex(origin), to = getPortIndex(destination);
+        if (from == -1 || to == -1) continue;
+        RouteNode* newNode = new RouteNode();
+        newNode->destIndex = to;
+        newNode->cost = cost;
+        strcpy(newNode->company, company);
+        strcpy(newNode->date, date);
+        strcpy(newNode->depTime, dep);
+        strcpy(newNode->arrTime, arr);
+        newNode->next = ports[from].head;
+        ports[from].head = newNode;
+    }
+    file.close();
+}
+
+void showGraph() {
+    for (int i = 0; i < portCount; i++) {
+        cout << ports[i].name << " (" << ports[i].dailyCharge << "$/day)";
+        RouteNode* t = ports[i].head;
+        if (t) cout << " → ";
+        while (t) {
+            cout << ports[t->destIndex].name << " (" << t->cost << "$, " << t->company << ")";
+            if (t->next) cout << " ";
+            t = t->next;
+        }
+        cout << endl;
+    }
+}
+
+void dijkstra(int src, int dest) {
+    int dist[MAX_PORTS]; bool vis[MAX_PORTS]; int prev[MAX_PORTS];
+    for (int i = 0; i < portCount; i++) { dist[i] = INT_MAX; vis[i] = false; prev[i] = -1; }
+    dist[src] = 0;
+
+    for (int c = 0; c < portCount; c++) {
+        int u = -1, minDist = INT_MAX;
+        for (int i = 0; i < portCount; i++)
+            if (!vis[i] && dist[i] < minDist) { minDist = dist[i]; u = i; }
+        if (u == -1) break;
+        vis[u] = true;
+        for (RouteNode* t = ports[u].head; t; t = t->next) {
+            int v = t->destIndex;
+            if (!vis[v] && dist[u] + t->cost < dist[v]) {
+                dist[v] = dist[u] + t->cost; prev[v] = u;
+            }
+        }
+    }
+
+    if (dist[dest] == INT_MAX) { cout << "No path found.\n"; return; }
+
+    cout << "Minimum cost: $" << dist[dest] << "\nPath: ";
+    int path[MAX_PORTS], len = 0;
+    for (int cur = dest; cur != -1; cur = prev[cur]) path[len++] = cur;
+    for (int i = len - 1; i >= 0; i--) {
+        cout << ports[path[i]].name;
+        if (i) cout << " → ";
+    }
+    cout << endl;
+}
+
+bool checkDirectNeighbor(int src, int dest) {
+    for (RouteNode* t = ports[src].head; t; t = t->next)
+        if (t->destIndex == dest) return true;
+    return false;
+}
+
+int main() {
+    loadPortCharges();
+    loadRoutes();
+    showGraph();
+
+    int src = getPortIndex("Karachi");
+    int dest = getPortIndex("Singapore");
+
+    if (checkDirectNeighbor(src, dest))
+        cout << "Direct route exists between Karachi and Singapore.\n";
+    else {
+        cout << "No direct route. Running Dijkstra...\n";
+        dijkstra(src, dest);
+    }
+}
+4. Summary
+✅ Loaded 15 ports with their daily charges from portcharges.txt
+✅ Built adjacency list using linked lists for routes
+✅ Checked for direct route between source and destination
+✅ Applied Dijkstra’s algorithm for route optimization
+✅ Displayed minimum cost and full route path
+✅ Ready for SFML integration for visualization of path traversal
