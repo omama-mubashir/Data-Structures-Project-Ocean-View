@@ -187,3 +187,15 @@ Omama Mubashir's Prompts (13/11/2025):
 "we'll go one by one so first lets make the A algorithm for this project which is missing"*
 "have you made changes to the whole code or added just this function?"
 "is this implemented properly and done?"
+
+OmamaMubashir+RehanAhmad(15/11/2025):
+"in the code up till now is the graph directed or undirected ?"
+"in struct port what is the use of a head and a tail pointer ?"
+"okay so tell me the concept of adjacency list"
+"let's start with the next feature custom shipping preferences"
+"what if the user doesn't add any filter and just selects a source and destination ?"
+"does this code use both A and djiskstra's algorithm? and when does it use them ? because it has the code for both A and Djikstra's algorithm"*
+"fix this first, we don't want user input on which algorithm to choose we have to apply both on the back end without telling or asking the user, it is us who decide which algorithm will suite best. Don't give me the code right now just explain which algorithm works best where"
+"we want to use both on the back end how do we use it here ?, how do we make this in such a way that it uses the best according to the scenario given. we want to use A when there is a direct link and when there isn't a direct link (that is multiple routes are available) then we want to use Djikstra's algorithm."*
+"integrate this in the code and give me the full code overall (not pieces)"
+"now check if feature 4 works perfectly"
