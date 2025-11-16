@@ -10,6 +10,7 @@ using namespace std;
 #define MAX_DATE_LENGTH 11
 #define MAX_TIME_LENGTH 6
 #define MAX_COMPANY_LENGTH 15
+#define DOCKING_SLOTS 2  // Fixed: All ports have 2 docking slots
 
 // ---------------- STRUCTURES ----------------
 
@@ -22,9 +23,8 @@ struct UserPreferences {
     bool hasMaxCostLimit;
     unsigned int maxCostLimit;
     bool hasMaxTimeLimit;
-    unsigned int maxTimeLimit;  // in hours
+    unsigned int maxTimeLimit;
     
-    // Constructor
     UserPreferences() {
         hasCompanyFilter = false;
         hasAvoidPort = false;
@@ -36,13 +36,117 @@ struct UserPreferences {
         maxTimeLimit = 0;
     }
     
-    // Check if any filter is active
     bool hasAnyFilter() const {
         return hasCompanyFilter || hasAvoidPort || hasMaxCostLimit || hasMaxTimeLimit;
     }
 };
 
-// Compact RouteNode - minimal memory footprint
+// Ship/Vessel information for queue
+struct Ship {
+    char shipName[MAX_NAME_LENGTH];
+    char arrivalTime[MAX_TIME_LENGTH];
+    char arrivalDate[MAX_DATE_LENGTH];
+    unsigned short arrivalMins;
+    unsigned int serviceTimeNeeded;  // in minutes
+    char originPort[MAX_NAME_LENGTH];
+    char destinationPort[MAX_NAME_LENGTH];
+    char company[MAX_COMPANY_LENGTH];
+    unsigned int voyageCost;
+};
+
+// Queue Node for ship queue
+struct QueueNode {
+    Ship ship;
+    QueueNode* next;
+};
+
+// Custom Queue class for ships waiting at port
+class ShipQueue {
+private:
+    QueueNode* front;
+    QueueNode* rear;
+    int size;
+
+public:
+    ShipQueue() : front(NULL), rear(NULL), size(0) {}
+    
+    ~ShipQueue() {
+        while (front) {
+            QueueNode* temp = front;
+            front = front->next;
+            delete temp;
+        }
+    }
+    
+    void enqueue(const Ship& ship) {
+        QueueNode* newNode = new (nothrow) QueueNode();
+        if (!newNode) return;
+        
+        newNode->ship = ship;
+        newNode->next = NULL;
+        
+        if (rear == NULL) {
+            front = rear = newNode;
+        } else {
+            rear->next = newNode;
+            rear = newNode;
+        }
+        size++;
+    }
+    
+    bool dequeue(Ship& ship) {
+        if (front == NULL) return false;
+        
+        QueueNode* temp = front;
+        ship = front->ship;
+        front = front->next;
+        
+        if (front == NULL) {
+            rear = NULL;
+        }
+        
+        delete temp;
+        size--;
+        return true;
+    }
+    
+    bool peek(Ship& ship) const {
+        if (front == NULL) return false;
+        ship = front->ship;
+        return true;
+    }
+    
+    bool isEmpty() const {
+        return front == NULL;
+    }
+    
+    int getSize() const {
+        return size;
+    }
+    
+    void display() const {
+        if (isEmpty()) {
+            cout << "    Queue: Empty\n";
+            return;
+        }
+        
+        cout << "    Queue (" << size << " ships waiting):\n";
+        QueueNode* curr = front;
+        int pos = 1;
+        while (curr && pos <= 3) {  // Show first 3 ships
+            cout << "      " << pos << ". " << curr->ship.shipName 
+                 << " [" << curr->ship.company << "] - ETA: " 
+                 << curr->ship.arrivalTime << "\n";
+            curr = curr->next;
+            pos++;
+        }
+        if (size > 3) {
+            cout << "      ... and " << (size - 3) << " more\n";
+        }
+    }
+};
+
+// Compact RouteNode
 struct RouteNode {
     unsigned char destinationIndex;
     char voyageDate[MAX_DATE_LENGTH];
@@ -60,9 +164,14 @@ struct Port {
     unsigned short dailyDockingCharge;
     RouteNode* routeListHead;
     RouteNode* routeListTail;
+    
+    // Queue management fields
+    ShipQueue* waitingQueue;
+    int occupiedSlots;
+    unsigned short currentDockedShips[DOCKING_SLOTS];  // Remaining service time
 };
 
-// Priority Queue Node for Dijkstra and A*
+// Priority Queue Node
 struct PQNode {
     unsigned char portIndex;
     unsigned int cost;
@@ -70,7 +179,6 @@ struct PQNode {
     PQNode* next;
 };
 
-// Simple Priority Queue
 class PriorityQueue {
 private:
     PQNode* head;
@@ -133,12 +241,19 @@ public:
     int getSize() const { return size; }
 };
 
-// ---------------- OPTIMIZED HELPER FUNCTIONS ----------------
+// ---------------- HELPER FUNCTIONS ----------------
 
 inline unsigned short timeToMinutes(const char* time) {
     if (!time || strlen(time) < 5) return 0;
     return ((time[0] - '0') * 10 + (time[1] - '0')) * 60 + 
            ((time[3] - '0') * 10 + (time[4] - '0'));
+}
+
+void minutesToTime(unsigned int minutes, char* timeStr) {
+    minutes = minutes % 1440;  // Wrap around 24 hours
+    int hours = minutes / 60;
+    int mins = minutes % 60;
+    sprintf(timeStr, "%02d:%02d", hours, mins);
 }
 
 inline bool isValidTimeFormat(const char* time) {
@@ -181,12 +296,49 @@ inline bool isSameDateOrLater(const char* date1, const char* date2) {
     return dateToInt(date1) >= dateToInt(date2);
 }
 
+inline bool isSameDate(const char* date1, const char* date2) {
+    return dateToInt(date1) == dateToInt(date2);
+}
+
 void clearInputBuffer() {
     cin.clear();
     cin.ignore(INT_MAX, '\n');
 }
 
-// ---------------- OPTIMIZED GRAPH CLASS ----------------
+// Calculate service time based on voyage cost (Option B)
+unsigned int calculateServiceTime(unsigned int voyageCost) {
+    // Service time in minutes = (cost / 10000) * 60 + 120 (base 2 hours)
+    return (voyageCost / 10000) * 60 + 120;
+}
+
+// Compare ships by arrival date and time for sorting
+int compareShipArrival(const Ship& s1, const Ship& s2) {
+    int date1 = dateToInt(s1.arrivalDate);
+    int date2 = dateToInt(s2.arrivalDate);
+    
+    if (date1 != date2) {
+        return date1 - date2;  // Earlier date comes first
+    }
+    
+    // Same date, compare by time
+    return s1.arrivalMins - s2.arrivalMins;
+}
+
+// Simple bubble sort for ships (custom implementation, no STL)
+void sortShipsByArrival(Ship* ships, int count) {
+    for (int i = 0; i < count - 1; i++) {
+        for (int j = 0; j < count - i - 1; j++) {
+            if (compareShipArrival(ships[j], ships[j + 1]) > 0) {
+                // Swap ships
+                Ship temp = ships[j];
+                ships[j] = ships[j + 1];
+                ships[j + 1] = temp;
+            }
+        }
+    }
+}
+
+// ---------------- GRAPH CLASS ----------------
 class Graph {
 private:
     Port ports[MAX_PORTS];
@@ -255,7 +407,6 @@ private:
         return totalMinutes / 60;
     }
     
-    // Check if direct route exists and matches preferences
     bool hasValidDirectRoute(int srcIdx, int destIdx, const char* date, 
                             const UserPreferences* prefs) const {
         if (!isValidPortIndex(srcIdx) || !isValidPortIndex(destIdx)) return false;
@@ -265,7 +416,6 @@ private:
         while (route) {
             if (route->destinationIndex == destIdx) {
                 if (isSameDateOrLater(route->voyageDate, date)) {
-                    // Check if matches preferences
                     if (prefs) {
                         if (!matchesPreferences(route, destIdx, *prefs)) {
                             route = route->nextRoute;
@@ -279,6 +429,100 @@ private:
         }
         
         return false;
+    }
+    
+    // Calculate queue wait time at a port for a given arrival time
+    unsigned int calculateQueueWaitTime(int portIdx, const char* arrivalDate, 
+                                       unsigned short arrivalMins) const {
+        if (!isValidPortIndex(portIdx)) return 0;
+        
+        // Get current queue state
+        int queueSize = ports[portIdx].waitingQueue->getSize();
+        int availableSlots = DOCKING_SLOTS - ports[portIdx].occupiedSlots;
+        
+        // If slots available and no queue, no wait time
+        if (availableSlots > 0 && queueSize == 0) {
+            return 0;
+        }
+        
+        // Calculate total wait time based on ships ahead in queue
+        unsigned int totalWaitMinutes = 0;
+        
+        // If all slots are occupied, need to wait for current ships to finish
+        if (availableSlots <= 0) {
+            // Find minimum remaining service time of docked ships
+            unsigned int minServiceTime = UINT_MAX;
+            for (int i = 0; i < DOCKING_SLOTS; i++) {
+                if (ports[portIdx].currentDockedShips[i] > 0 && 
+                    ports[portIdx].currentDockedShips[i] < minServiceTime) {
+                    minServiceTime = ports[portIdx].currentDockedShips[i];
+                }
+            }
+            
+            if (minServiceTime != UINT_MAX) {
+                totalWaitMinutes += minServiceTime;
+            }
+        }
+        
+        // Add wait time for ships in queue
+        // Need to estimate service time for each ship in queue
+        // Since we don't have direct access to queue internals, use estimation
+        if (queueSize > 0) {
+            // Each position in queue adds average service time
+            // Position = (queueSize / DOCKING_SLOTS) gives number of "rounds"
+            int myPosition = queueSize + 1;  // Position if we join queue now
+            int roundsToWait = (myPosition - 1) / DOCKING_SLOTS;
+            
+            if (roundsToWait > 0) {
+                // Average service time per ship is ~3 hours = 180 minutes
+                // This is a reasonable estimate based on typical cargo operations
+                totalWaitMinutes += roundsToWait * 180;
+            }
+        }
+        
+        return totalWaitMinutes;
+    }
+    
+    // Simulate ship arrival and queue management
+    void simulateShipArrival(int portIdx, const Ship& ship) {
+        if (!isValidPortIndex(portIdx)) return;
+        
+        if (ports[portIdx].occupiedSlots < DOCKING_SLOTS) {
+            // Slot available, dock immediately
+            ports[portIdx].occupiedSlots++;
+            ports[portIdx].currentDockedShips[ports[portIdx].occupiedSlots - 1] = 
+                ship.serviceTimeNeeded;
+        } else {
+            // All slots occupied, add to queue
+            ports[portIdx].waitingQueue->enqueue(ship);
+        }
+    }
+    
+    // Process port queues (simulate time passing)
+    void processPortQueues(int portIdx, unsigned int timeElapsed) {
+        if (!isValidPortIndex(portIdx)) return;
+        
+        // Reduce service time for docked ships
+        for (int i = 0; i < DOCKING_SLOTS; i++) {
+            if (ports[portIdx].currentDockedShips[i] > 0) {
+                if (ports[portIdx].currentDockedShips[i] >= timeElapsed) {
+                    ports[portIdx].currentDockedShips[i] -= timeElapsed;
+                } else {
+                    ports[portIdx].currentDockedShips[i] = 0;
+                }
+                
+                // If ship finished, free the slot and dock next from queue
+                if (ports[portIdx].currentDockedShips[i] == 0) {
+                    ports[portIdx].occupiedSlots--;
+                    
+                    Ship nextShip;
+                    if (ports[portIdx].waitingQueue->dequeue(nextShip)) {
+                        ports[portIdx].occupiedSlots++;
+                        ports[portIdx].currentDockedShips[i] = nextShip.serviceTimeNeeded;
+                    }
+                }
+            }
+        }
     }
 
 public:
@@ -314,6 +558,11 @@ public:
             ports[totalPorts].dailyDockingCharge = (unsigned short)charge;
             ports[totalPorts].routeListHead = NULL;
             ports[totalPorts].routeListTail = NULL;
+            ports[totalPorts].waitingQueue = new ShipQueue();
+            ports[totalPorts].occupiedSlots = 0;
+            for (int i = 0; i < DOCKING_SLOTS; i++) {
+                ports[totalPorts].currentDockedShips[i] = 0;
+            }
             totalPorts++;
         }
 
@@ -332,6 +581,11 @@ public:
         char date[MAX_DATE_LENGTH], depTime[MAX_TIME_LENGTH], arrTime[MAX_TIME_LENGTH];
         char company[MAX_COMPANY_LENGTH];
         int cost, loaded = 0;
+        
+        // Temporary array to store all ships before sorting
+        const int MAX_SHIPS = 500;  // Allocate space for ships
+        Ship* allShips = new Ship[MAX_SHIPS];
+        int shipCount = 0;
 
         while (file >> origin >> dest >> date >> depTime >> arrTime >> cost >> company) {
             int fromIdx = getPortIndex(origin);
@@ -359,11 +613,46 @@ public:
                 ports[fromIdx].routeListTail->nextRoute = node;
                 ports[fromIdx].routeListTail = node;
             }
+            
+            // Create ship for queue simulation (store in array first)
+            if (shipCount < MAX_SHIPS) {
+                Ship& ship = allShips[shipCount];
+                sprintf(ship.shipName, "%s_%s_%d", company, date, shipCount);
+                strcpy(ship.arrivalTime, arrTime);
+                strcpy(ship.arrivalDate, date);
+                ship.arrivalMins = timeToMinutes(arrTime);
+                ship.serviceTimeNeeded = calculateServiceTime(cost);
+                strcpy(ship.originPort, origin);
+                strcpy(ship.destinationPort, dest);
+                strcpy(ship.company, company);
+                ship.voyageCost = cost;
+                
+                shipCount++;
+            }
+            
             loaded++;
         }
 
         file.close();
-        cout << "Loaded " << loaded << " routes.\n\n";
+        
+        // CRITICAL FIX: Sort all ships by arrival date and time
+        cout << "Sorting " << shipCount << " ships by arrival time...\n";
+        sortShipsByArrival(allShips, shipCount);
+        
+        // Now simulate ship arrivals in chronological order
+        cout << "Simulating port arrivals in chronological order...\n";
+        for (int i = 0; i < shipCount; i++) {
+            int destIdx = getPortIndex(allShips[i].destinationPort);
+            if (destIdx != -1) {
+                simulateShipArrival(destIdx, allShips[i]);
+            }
+        }
+        
+        // Clean up
+        delete[] allShips;
+        
+        cout << "Loaded " << loaded << " routes.\n";
+        cout << "Port queues initialized with " << shipCount << " ships (chronologically sorted).\n\n";
     }
 
     void displayGraph() const {
@@ -375,13 +664,16 @@ public:
         cout << "\n========== PORT NETWORK ==========\n\n";
         for (unsigned char i = 0; i < totalPorts; i++) {
             cout << ports[i].portName << " ($" << ports[i].dailyDockingCharge << "/day)\n";
+            cout << "  Docking: " << ports[i].occupiedSlots << "/" << DOCKING_SLOTS << " slots occupied\n";
+            ports[i].waitingQueue->display();
             
             RouteNode* route = ports[i].routeListHead;
             if (!route) {
-                cout << "  No routes\n";
+                cout << "  No outgoing routes\n";
             } else {
+                cout << "  Outgoing routes:\n";
                 while (route) {
-                    cout << "  → " << ports[route->destinationIndex].portName
+                    cout << "    → " << ports[route->destinationIndex].portName
                          << " | " << route->voyageDate
                          << " | " << route->departureTime << "-" << route->arrivalTime
                          << " | $" << route->voyageCost
@@ -422,6 +714,7 @@ public:
         
         unsigned int minCost[MAX_PORTS];
         unsigned int totalTime[MAX_PORTS];
+        unsigned int queueWaitTime[MAX_PORTS];
         bool visited[MAX_PORTS] = {false};
         char prevPort[MAX_PORTS];
         RouteNode* usedRoute[MAX_PORTS] = {NULL};
@@ -431,6 +724,7 @@ public:
         for (unsigned char i = 0; i < totalPorts; i++) {
             minCost[i] = UINT_MAX;
             totalTime[i] = 0;
+            queueWaitTime[i] = 0;
             prevPort[i] = -1;
         }
         minCost[srcIdx] = 0;
@@ -478,9 +772,19 @@ public:
                     }
                     
                     if (timeValid && !visited[nextPort]) {
-                        unsigned int newCost = minCost[currPort] + route->voyageCost;
+                        // Calculate queue wait time at next port (Option A - affects cost)
+                        unsigned int queueWait = calculateQueueWaitTime(
+                            nextPort, route->voyageDate, route->arrivalMins);
+                        unsigned int serviceTime = calculateServiceTime(route->voyageCost);
+                        
+                        // Add queue wait time to cost calculation
+                        unsigned int queueCostPenalty = (queueWait / 60) * 
+                                                       ports[nextPort].dailyDockingCharge / 24;
+                        unsigned int newCost = minCost[currPort] + route->voyageCost + queueCostPenalty;
+                        
                         unsigned int voyageTime = calculateVoyageTime(route);
-                        unsigned int newTotalTime = totalTime[currPort] + voyageTime;
+                        unsigned int newTotalTime = totalTime[currPort] + voyageTime + 
+                                                   (queueWait / 60) + (serviceTime / 60);
                         
                         bool withinTimeLimit = true;
                         if (prefs && prefs->hasMaxTimeLimit) {
@@ -490,6 +794,7 @@ public:
                         if (withinTimeLimit && newCost < minCost[nextPort]) {
                             minCost[nextPort] = newCost;
                             totalTime[nextPort] = newTotalTime;
+                            queueWaitTime[nextPort] = queueWaitTime[currPort] + (queueWait / 60);
                             prevPort[nextPort] = currPort;
                             usedRoute[nextPort] = route;
                             
@@ -561,26 +866,51 @@ public:
             cout << ports[path[i]].portName;
             totalDocking += ports[path[i]].dailyDockingCharge;
             
+            // Show queue status at intermediate ports (Option B - only if queue exists)
+            if (i > 0 && i < len - 1) {  // Not source or destination
+                int queueSize = ports[path[i]].waitingQueue->getSize();
+                int occupied = ports[path[i]].occupiedSlots;
+                
+                if (queueSize > 0 || occupied > 0) {
+                    cout << "\n  Port Status:";
+                    cout << "\n    Docking: " << occupied << "/" << DOCKING_SLOTS << " slots occupied";
+                    if (queueSize > 0) {
+                        cout << "\n    Queue: " << queueSize << " ships waiting";
+                        unsigned int waitTime = calculateQueueWaitTime(path[i], 
+                            routes[i-1]->voyageDate, routes[i-1]->arrivalMins);
+                        if (waitTime > 0) {
+                            cout << "\n    Estimated wait: " << (waitTime / 60) << " hours";
+                        }
+                    }
+                }
+            }
+            
             if (i > 0 && routes[i-1]) {
                 RouteNode* r = routes[i-1];
+                unsigned int serviceTime = calculateServiceTime(r->voyageCost);
+                
                 cout << "\n  ↓ [" << r->shippingCompany << "] "
                      << r->departureTime << " (" << r->voyageDate << ") "
                      << "→ " << r->arrivalTime << " | $" << r->voyageCost;
+                cout << "\n    Service time: " << (serviceTime / 60) << " hours";
                 
                 if (i > 1 && routes[i-2]) {
                     int layover = calculateLayoverHours(r->arrivalMins, routes[i-2]->departureMins);
                     if (layover > 0) {
-                        cout << "\n  ⏱ Layover: " << layover << "h";
+                        cout << "\n    Layover: " << layover << "h";
                         if (layover > 12) cout << " (Extended)";
                     }
                 }
-                cout << "\n\n";
+                cout << "\n";
             }
         }
 
-        cout << "====================================\n";
+        cout << "\n====================================\n";
         cout << "Voyage Cost: $" << minCost[destIdx] << "\n";
         cout << "Total Time: " << totalTime[destIdx] << " hours\n";
+        if (queueWaitTime[destIdx] > 0) {
+            cout << "Queue Wait Time: " << queueWaitTime[destIdx] << " hours\n";
+        }
         cout << "Port Charges: $" << totalDocking << "\n";
         cout << "TOTAL: $" << (minCost[destIdx] + totalDocking) << "\n";
         cout << "====================================\n\n";
@@ -643,6 +973,28 @@ public:
         return prefs;
     }
 
+    void displayPortQueueStatus() const {
+        cout << "\n========== PORT QUEUE STATUS ==========\n\n";
+        for (unsigned char i = 0; i < totalPorts; i++) {
+            cout << ports[i].portName << ":\n";
+            cout << "  Docking Capacity: " << DOCKING_SLOTS << " slots\n";
+            cout << "  Currently Occupied: " << ports[i].occupiedSlots << " slots\n";
+            
+            if (ports[i].occupiedSlots > 0) {
+                cout << "  Docked Ships Service Time:\n";
+                for (int j = 0; j < DOCKING_SLOTS; j++) {
+                    if (ports[i].currentDockedShips[j] > 0) {
+                        cout << "    Slot " << (j+1) << ": " 
+                             << (ports[i].currentDockedShips[j] / 60) << " hours remaining\n";
+                    }
+                }
+            }
+            
+            ports[i].waitingQueue->display();
+            cout << "\n";
+        }
+    }
+
     void run() {
         loadPortCharges();
         loadRoutes();
@@ -658,10 +1010,11 @@ public:
             cout << "║   OCEANROUTE NAV - MENU       ║\n";
             cout << "╚════════════════════════════════╝\n";
             cout << "1. Display Network\n";
-            cout << "2. Find Cheapest Route\n";
-            cout << "3. Find Route with Preferences\n";
-            cout << "4. Exit\n\n";
-            cout << "Choice (1-4): ";
+            cout << "2. Display Port Queue Status\n";
+            cout << "3. Find Cheapest Route\n";
+            cout << "4. Find Route with Preferences\n";
+            cout << "5. Exit\n\n";
+            cout << "Choice (1-5): ";
             
             if (!(cin >> choice)) {
                 cout << "❌ Invalid input!\n";
@@ -674,8 +1027,12 @@ public:
                 case 1:
                     displayGraph();
                     break;
+                
+                case 2:
+                    displayPortQueueStatus();
+                    break;
                     
-                case 2: {
+                case 3: {
                     char src[MAX_NAME_LENGTH], dst[MAX_NAME_LENGTH], date[MAX_DATE_LENGTH];
                     
                     cout << "\n--- Find Cheapest Route ---\n";
@@ -701,7 +1058,6 @@ public:
                     } else if (di == -1) {
                         cout << "❌ Destination port '" << dst << "' not found!\n";
                     } else {
-                        // INTELLIGENT ALGORITHM SELECTION
                         bool hasDirectRoute = hasValidDirectRoute(si, di, date, NULL);
                         
                         if (hasDirectRoute) {
@@ -716,7 +1072,7 @@ public:
                     break;
                 }
                 
-                case 3: {
+                case 4: {
                     char src[MAX_NAME_LENGTH], dst[MAX_NAME_LENGTH], date[MAX_DATE_LENGTH];
                     
                     cout << "\n--- Find Route with Custom Preferences ---\n";
@@ -745,7 +1101,6 @@ public:
                     } else {
                         UserPreferences prefs = getUserPreferences();
                         
-                        // INTELLIGENT ALGORITHM SELECTION WITH PREFERENCES
                         bool hasDirectRoute = hasValidDirectRoute(si, di, date, &prefs);
                         
                         if (hasDirectRoute && !prefs.hasAnyFilter()) {
@@ -759,14 +1114,14 @@ public:
                     break;
                 }
                 
-                case 4:
+                case 5:
                     cout << "\nThank you! Safe travels! 🚢\n";
                     break;
                     
                 default:
                     cout << "❌ Invalid choice!\n";
             }
-        } while (choice != 4);
+        } while (choice != 5);
     }
 
     ~Graph() {
@@ -777,6 +1132,7 @@ public:
                 curr = curr->nextRoute;
                 delete temp;
             }
+            delete ports[i].waitingQueue;
         }
     }
 };
